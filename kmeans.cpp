@@ -14,7 +14,7 @@
 int main(int argc, char* argv[]) {
     // Start timing
     double start_time = omp_get_wtime();
-
+    
     if (argc < 3) {
         std::cerr << "Please use correct command format: " << argv[0] << " <input_file> <number_clusters>\n";
         return 1;
