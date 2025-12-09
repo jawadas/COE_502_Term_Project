@@ -117,35 +117,35 @@ int main(int argc, char* argv[]) {
 
         int iter;
         for (iter = 0; iter < MAX_ITERS; ++iter) {
-            // ---------------- Assignment step ----------------
-            int changes = 0;
+           // -------------------- ASSIGNMENT STEP (PARALLEL) --------------------
+int changes = 0;
 
-            for (int i = 0; i < N; i++) {
-                float bestDistSq = INFINITY;  // Use squared distance (no sqrt needed)
-                int bestCluster = -1;
+for (int i = 0; i < N; i++) {
+    float bestDist = INFINITY;
+    int bestCluster = -1;
 
-                // Calculate squared Euclidean distance (avoid sqrt for comparison)
-                for (int c = 0; c < K; c++) {
-                    float sum_sq = 0.0f;
-                    
-                    // Calculate distance without nested parallelism
-                    for (int d = 0; d < D; d++) {
-                        float diff = data[i][d] - local_centroids[c][d];
-                        sum_sq += diff * diff;
-                    }
+    // Loop over clusters
+    for (int c = 0; c < K; c++) {
+        float sum_sq = 0.0f;
 
-                    if (sum_sq < bestDistSq) {
-                        bestDistSq = sum_sq;
-                        bestCluster = c;
-                    }
-                }
+        // SIMD vectorization: compute squared distance in parallel
+        #pragma omp simd reduction(+:sum_sq)
+        for (int d = 0; d < D; d++) {
+            float diff = data[i][d] - local_centroids[c][d];
+            sum_sq += diff * diff;
+        }
 
-                if (bestCluster != local_cluster[i]) {
-                    changes++;
-                }
-                local_cluster[i] = bestCluster;
-            }
+        if (sum_sq < bestDist) {
+            bestDist = sum_sq;
+            bestCluster = c;
+        }
+    }
 
+    if (bestCluster != local_cluster[i]) {
+        changes++;
+    }
+    local_cluster[i] = bestCluster;
+}
             // ---------------- Update step ----------------
             std::vector<std::array<float, D>> sum(K);
             std::vector<int> count(K, 0);
