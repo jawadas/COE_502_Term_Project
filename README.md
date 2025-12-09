@@ -1,65 +1,86 @@
-Parallel K-Means Clustering with Best-of-N Restarts (C++ / OpenMP)
+🚀 Parallel K-Means Clustering with Best-of-N Restarts (C++ / OpenMP)
 
-This project implements a parallel K-means clustering algorithm in C++ using OpenMP, with:
+This project implements a parallel K-means clustering algorithm in C++ using OpenMP, supporting:
 
-Support for 8-dimensional data
+✅ 8-dimensional datasets
 
-Multiple random restarts (best of N runs)
+✅ Multiple random restarts (best-of-N strategy)
 
-A custom accuracy metric (average distance to centroid)
+✅ Custom accuracy metric (average point–centroid distance)
 
-Detailed CSV outputs for analysis and reporting
+✅ Highly optimized assignment + update steps
 
-💡 If you also have sample1.cpp in this repo:
-Read / run sample1 first – it demonstrates K-means on a tiny static dataset (2D, a few points) to understand the algorithm before jumping into the full 8D / large-dataset version.
+✅ Rich CSV outputs for analysis and visualization
 
-1. What the Program Does
+💡 Tip: If this repo includes sample1.cpp, run that first.
+It demonstrates the algorithm on a tiny 2D dataset so you clearly see the K-means process before moving to the full 8D version.
+
+📌 What the Program Does
 
 Given:
 
-an input CSV file with N data points
+A CSV file with N rows × 8 columns (floats, no header)
 
-each point having 8 numerical features (no header expected)
+A target number of clusters K
 
-a number of clusters K (passed as a command-line argument)
+The program performs the following:
 
-the program:
+1. Data Loading
 
-Loads all data points from the CSV file into memory.
+Reads all rows into memory
 
-Runs K-means clustering multiple times (MAX_RUNS, default 10) with different random initial centroids.
+Measures load time
 
-For each run:
+2. Best-of-N K-Means (Parallel)
 
-Randomly picks K data points as initial centroids.
+Runs K-means MAX_RUNS times (default: 10), each with different random initial centroids.
 
-Iteratively does:
+Each run performs:
 
-Assignment step: assign each point to its closest centroid (squared Euclidean distance, no sqrt in comparison).
+Assignment Step (Parallel)
 
-Update step: recompute centroids as the mean of points in each cluster.
+Compute squared Euclidean distance to each centroid
 
-Stops when no point changes cluster or reaches MAX_ITERS (default 200).
+Assign each point to the nearest cluster
 
-Computes run accuracy = average Euclidean distance of all points to their assigned centroid.
+Update Step
 
-Keeps the best run (the one with lowest average distance).
+Recompute centroids as the mean of all assigned points
 
-Recomputes all point-to-centroid distances for the best clustering.
+Stopping Conditions
+
+K-means stops early if:
+
+No point changes cluster
+or
+
+MAX_ITERS iterations reached (default: 200)
+
+Run Accuracy
+
+Accuracy = average Euclidean distance of all points to their final centroid.
+
+The run with the lowest average distance becomes the best clustering.
+
+3. Final Reporting
+
+For the best run:
 
 Prints:
 
-Best overall accuracy
+Best accuracy
 
 Best centroids
 
 Cluster sizes
 
-First 100 points with distances and cluster IDs
+First 100 points with distances & cluster IDs
 
-Timing summary (loading + clustering)
+Full timing breakdown
 
-Writes multiple CSV files:
+Computes all point-to-centroid distances
+
+Generates multiple CSV outputs:
 
 clustering_results.csv
 
@@ -69,30 +90,32 @@ top10_per_cluster.csv
 
 cluster_centroids.csv
 
-2. Building the Program
+cluster_statistics.csv
 
-You need:
+🛠️ Building the Program
 
-A C++ compiler with OpenMP support (e.g. g++, clang++ with appropriate flags).
+You need a compiler with OpenMP support.
 
-On Linux:
-
+Linux
 g++ -O2 -fopenmp -o kmeans_cluster main.cpp
 
+macOS (recommended: Homebrew GCC)
 
-On macOS with Homebrew gcc (recommended):
+Apple Clang does not support OpenMP.
+
+Install GCC:
+
+brew install gcc
+
+
+Compile:
 
 g++-13 -O2 -fopenmp -o kmeans_cluster main.cpp
 
 
-(Replace g++-13 with your installed GCC version.)
+(Replace g++-13 with whichever GCC version you have.)
 
-If you use Apple clang, OpenMP is not enabled by default; you’ll need libomp and extra flags.
-
-3. Usage
-
-Basic syntax:
-
+▶️ Usage
 ./kmeans_cluster <input_file> <number_clusters>
 
 
@@ -103,29 +126,24 @@ Example:
 
 Where:
 
-generated_dataset.csv is your 8D dataset.
+generated_dataset.csv → dataset with 8 columns
 
-5 means K=5 clusters.
+5 → number of clusters (K)
 
-4. Key Parameters in the Code
+⚙️ Key Tunable Parameters
 
-Inside the code you’ll see:
+Inside the code:
 
-const int D = 8;       // Number of features (dimensions)
-const int MAX_RUNS = 10;
-const int MAX_ITERS = 200;
+const int D = 8;          // Number of features
+const int MAX_RUNS = 10;  // Random restarts
+const int MAX_ITERS = 200; // Max K-means iterations
 
+Notes & Recommendations
 
-You can tune:
+Use larger MAX_RUNS (50–100) for more stable clustering, especially with noisy data.
 
-MAX_RUNS
-Number of random initializations. Higher = more chance to escape bad local minima, but more computation.
+For very large datasets, increase parallelism via:
 
-MAX_ITERS
-Maximum K-means iterations per run. Stops earlier if no assignment changes.
+export OMP_NUM_THREADS=8
 
-Progress is printed every 5 runs:
-
-if (completed_runs % 5 == 0) {
-    // prints progress, best accuracy, elapsed time, ETA
-}
+The code uses squared distance for comparisons (faster), and sqrt distance only for final accuracy.
