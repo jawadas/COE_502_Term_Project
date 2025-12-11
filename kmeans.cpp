@@ -10,50 +10,52 @@
 #include <sstream>
 #include <limits>
 #include <algorithm>
+using namespace std;
 
 int main(int argc, char* argv[]) {
+    omp_set_dynamic(0);
     // Start timing
     double start_time = omp_get_wtime();
     
     if (argc < 3) {
-        std::cerr << "Please use correct command format: " << argv[0] << " <input_file> <number_clusters>\n";
+        cerr << "Please use correct command format: " << argv[0] << " <input_file> <number_clusters>\n";
         return 1;
     }
 
-    std::ifstream in(argv[1]);
+    ifstream in(argv[1]);
     if (!in.is_open()) {
-        std::cerr << "Error: could not open file " << argv[1] << "\n";
+        cerr << "Error: could not open file " << argv[1] << "\n";
         return 1;
     }
 
-    int K = std::stoi(argv[2]);
+    int K = stoi(argv[2]);
     if (K <= 0) {
-        std::cerr << "Error: number of clusters must be positive.\n";
+        cerr << "Error: number of clusters must be positive.\n";
         return 1;
     }
 
     const int D = 8; // 8 features in the dataset
-    std::vector<std::array<float, D>> data;
+    vector<array<float, D>> data;
 
-    std::string line;
-    while (std::getline(in, line)) {
+    string line;
+    while (getline(in, line)) {
         if (line.empty()) continue;
 
-        std::stringstream ss(line);
-        std::array<float, D> point;
+        stringstream ss(line);
+        array<float, D> point;
 
         bool valid_row = true;
         for (int d = 0; d < D; d++) {
-            std::string value;
-            if (!std::getline(ss, value, ',')) {
+            string value;
+            if (!getline(ss, value, ',')) {
                 if (d == 0 && ss.eof()) {
                     valid_row = false;
                     break;
                 }
-                std::cerr << "Error: line has fewer than " << D << " columns.\n";
+                cerr << "Error: line has fewer than " << D << " columns.\n";
                 return 1;
             }
-            point[d] = std::stof(value);
+            point[d] = stof(value);
         }
 
         if (valid_row) {
@@ -64,33 +66,33 @@ int main(int argc, char* argv[]) {
 
     int N = static_cast<int>(data.size());
     if (N == 0) {
-        std::cerr << "Error: no data points read from file.\n";
+        cerr << "Error: no data points read from file.\n";
         return 1;
     }
 
-    std::cout << "Loaded " << N << " points with " << D << " dimensions from file.\n";
+    cout << "Loaded " << N << " points with " << D << " dimensions from file.\n";
 
     double load_time = omp_get_wtime();
-    std::cout << "Data loading time: " << (load_time - start_time) << " seconds\n";
+    cout << "Data loading time: " << (load_time - start_time) << " seconds\n";
 
     // Best-of-1000 tracking (shared across all threads)
     const int MAX_RUNS = 10;
-    const int MAX_ITERS = 200;
+    const int MAX_ITERS = 2000;
 
-    double best_overall_accuracy = std::numeric_limits<double>::infinity();
-    std::vector<std::array<float, D>> best_centroids(K);
-    std::vector<int> best_cluster(N, -1);
+    double best_overall_accuracy = numeric_limits<double>::infinity();
+    vector<array<float, D>> best_centroids(K);
+    vector<int> best_cluster(N, -1);
 
     // Thread-safe random number generation - one seed per thread
     int num_threads = omp_get_max_threads();
-    std::vector<unsigned int> seeds(num_threads);
+    vector<unsigned int> seeds(num_threads);
     for (int i = 0; i < num_threads; i++) {
-        seeds[i] = static_cast<unsigned>(time(nullptr)) + i * 1000;
+        seeds[i] = 1234u + i * 1000;
     }
 
-    std::cout << "Running K-means with " << num_threads << " parallel threads...\n";
-    std::cout << "Progress will be shown every 5 runs...\n";
-    std::cout << std::flush;
+    cout << "Running K-means with " << num_threads << " parallel threads...\n";
+    cout << "Progress will be shown every 5 runs...\n";
+    cout << flush;
 
     double compute_start = omp_get_wtime();
 
@@ -101,13 +103,13 @@ int main(int argc, char* argv[]) {
     // MAIN PARALLELIZATION: Parallelize the outer run loop
     // Each thread independently runs multiple K-means iterations
     // ============================================================================
-    #pragma omp parallel for schedule(dynamic, 5)
+    #pragma omp parallel for schedule(dynamic) proc_bind(spread)
     for (int run = 0; run < MAX_RUNS; ++run) {
         int tid = omp_get_thread_num();
         
         // Thread-local copies (each thread needs its own workspace)
-        std::vector<int> local_cluster(N, -1);
-        std::vector<std::array<float, D>> local_centroids(K);
+        vector<int> local_cluster(N, -1);
+        vector<array<float, D>> local_centroids(K);
 
         // ---------- Random initialization of centroids for this run ----------
         for (int c = 0; c < K; c++) {
@@ -147,8 +149,8 @@ for (int i = 0; i < N; i++) {
     local_cluster[i] = bestCluster;
 }
             // ---------------- Update step ----------------
-            std::vector<std::array<float, D>> sum(K);
-            std::vector<int> count(K, 0);
+            vector<array<float, D>> sum(K);
+            vector<int> count(K, 0);
 
             // Initialize sums to 0
             for (int c = 0; c < K; ++c) {
@@ -194,7 +196,7 @@ for (int i = 0; i < N; i++) {
                 float diff = data[i][d] - local_centroids[c][d];
                 sum_sq += diff * diff;
             }
-            total_dist += std::sqrt(sum_sq);
+            total_dist += sqrt(sum_sq);
         }
 
         double local_accuracy = total_dist / static_cast<double>(N);
@@ -216,12 +218,12 @@ for (int i = 0; i < N; i++) {
                 double estimated_total = (elapsed / completed_runs) * MAX_RUNS;
                 double remaining = estimated_total - elapsed;
                 
-                std::cout << "Progress: " << completed_runs << " / " << MAX_RUNS 
+                cout << "Progress: " << completed_runs << " / " << MAX_RUNS 
                           << " runs (" << (completed_runs * 100 / MAX_RUNS) << "%) "
                           << "| Best accuracy: " << best_overall_accuracy 
                           << " | Elapsed: " << elapsed << "s"
                           << " | ETA: " << remaining << "s\n";
-                std::cout << std::flush;
+                cout << flush;
             }
         }
     } // end parallel runs
@@ -229,7 +231,7 @@ for (int i = 0; i < N; i++) {
     double compute_end = omp_get_wtime();
 
     // ---------------- Recompute distances for BEST clustering for output ----------------
-    std::vector<std::vector<float>> all_distances(N, std::vector<float>(K));
+    vector<vector<float>> all_distances(N, vector<float>(K));
     
     #pragma omp parallel for collapse(2)
     for (int i = 0; i < N; ++i) {
@@ -241,93 +243,93 @@ for (int i = 0; i < N; i++) {
                 float diff = data[i][d] - best_centroids[c][d];
                 sum_sq += diff * diff;
             }
-            all_distances[i][c] = std::sqrt(sum_sq);
+            all_distances[i][c] = sqrt(sum_sq);
         }
     }
 
     // ---------------- Print best centroids & accuracy ----------------
-    std::cout << "\n=== Best Clustering over " << MAX_RUNS << " runs ===\n";
-    std::cout << "Best overall accuracy (average distance to centroid): "
+    cout << "\n=== Best Clustering over " << MAX_RUNS << " runs ===\n";
+    cout << "Best overall accuracy (average distance to centroid): "
               << best_overall_accuracy << "\n\n";
 
-    std::cout << "Centroids of the BEST cluster configuration:\n";
+    cout << "Centroids of the BEST cluster configuration:\n";
     for (int c = 0; c < K; ++c) {
-        std::cout << "  C" << c << " = (";
+        cout << "  C" << c << " = (";
         for (int d = 0; d < D; ++d) {
-            std::cout << best_centroids[c][d];
-            if (d < D - 1) std::cout << ", ";
+            cout << best_centroids[c][d];
+            if (d < D - 1) cout << ", ";
         }
-        std::cout << ")\n";
+        cout << ")\n";
     }
-    std::cout << "\n";
+    cout << "\n";
 
     // ---------------- Cluster statistics ----------------
-    std::vector<int> cluster_sizes(K, 0);
+    vector<int> cluster_sizes(K, 0);
     for (int i = 0; i < N; ++i) {
         cluster_sizes[best_cluster[i]]++;
     }
     
-    std::cout << "Cluster sizes:\n";
+    cout << "Cluster sizes:\n";
     for (int c = 0; c < K; ++c) {
-        std::cout << "  C" << c << ": " << cluster_sizes[c] << " points\n";
+        cout << "  C" << c << ": " << cluster_sizes[c] << " points\n";
     }
-    std::cout << "\n";
+    cout << "\n";
 
     // ---------------- Final reporting ----------------
-    std::cout << "Clustering complete. Printing first 100 results of BEST clustering...\n\n";
-    std::cout << std::fixed << std::setprecision(3);
+    cout << "Clustering complete. Printing first 100 results of BEST clustering...\n\n";
+    cout << fixed << setprecision(3);
 
     // Print header with all 8 dimensions
-    std::cout << "Point\t";
+    cout << "Point\t";
     for (int d = 0; d < D; d++) {
-        std::cout << "D" << d << "\t";
+        cout << "D" << d << "\t";
     }
     for (int c = 0; c < K; c++) {
-        std::cout << "DistC" << c << "\t";
+        cout << "DistC" << c << "\t";
     }
-    std::cout << "Cluster\n";
+    cout << "Cluster\n";
 
-    int print_limit = std::min(N, 100);
+    int print_limit = min(N, 100);
 
     for (int i = 0; i < print_limit; i++) {
-        std::cout << "P" << i << "\t";
+        cout << "P" << i << "\t";
 
         for (int d = 0; d < D; d++) {
-            std::cout << data[i][d] << "\t";
+            cout << data[i][d] << "\t";
         }
 
         for (int c = 0; c < K; c++) {
-            std::cout << all_distances[i][c] << "\t";
+            cout << all_distances[i][c] << "\t";
         }
 
-        std::cout << "C" << best_cluster[i] << "\n";
+        cout << "C" << best_cluster[i] << "\n";
     }
 
     if (N > 100) {
-        std::cout << "... (showing first 100 of " << N << " points)\n";
+        cout << "... (showing first 100 of " << N << " points)\n";
     }
 
     double total_time = compute_end - start_time;
 
-    std::cout << "\n";
-    std::cout << "=== Timing Summary ===\n";
-    std::cout << std::fixed << std::setprecision(6);
-    std::cout << "Data loading time:              " << (load_time - start_time)       << " seconds\n";
-    std::cout << "K-means (" << MAX_RUNS << " runs) time:   " 
+    cout << "\n";
+    cout << "=== Timing Summary ===\n";
+    cout << fixed << setprecision(6);
+    cout << "Data loading time:              " << (load_time - start_time)       << " seconds\n";
+    cout << "K-means (" << MAX_RUNS << " runs) time:   " 
               << (compute_end - compute_start) << " seconds\n";
-    std::cout << "Total elapsed time:             " << total_time                    << " seconds\n";
-    std::cout << "Average time per run:           " << (compute_end - compute_start) / MAX_RUNS << " seconds\n";
-    std::cout << "Threads used:                   " << num_threads << "\n";
-    std::cout << std::endl;
+    cout << "Total elapsed time:             " << total_time                    << " seconds\n";
+    cout << "Average time per run:           " << (compute_end - compute_start) / MAX_RUNS << " seconds\n";
+    cout << "Threads used:                   " << num_threads << "\n";
+    cout << endl;
 
     // ---------------- Write ALL clustering results to file ----------------
-    std::cout << "\n=== Writing Results to CSV Files ===\n";
+    cout << "\n=== Writing Results to CSV Files ===\n";
     
     // 1. Write complete clustering results
-    std::cout << "Writing complete clustering results to 'clustering_results.csv'...\n";
+    cout << "Writing complete clustering results to 'clustering_results.csv'...\n";
     {
-        std::ofstream out("clustering_results.csv");
-        out << std::fixed << std::setprecision(3);
+        ofstream out("clustering_results.csv");
+        out << fixed << setprecision(3);
 
         // Header
         out << "Point,";
@@ -352,13 +354,13 @@ for (int i = 0; i < N; i++) {
         }
         out.close();
     }
-    std::cout << "  ✓ Complete results written (" << N << " points)\n";
+    cout << "  ✓ Complete results written (" << N << " points)\n";
 
     // 2. Write best representative points per cluster (closest to centroids)
-    std::cout << "\nWriting best representative points to 'best_cluster_points.csv'...\n";
+    cout << "\nWriting best representative points to 'best_cluster_points.csv'...\n";
     {
-        std::ofstream out("best_cluster_points.csv");
-        out << std::fixed << std::setprecision(3);
+        ofstream out("best_cluster_points.csv");
+        out << fixed << setprecision(3);
 
         // Header
         out << "Cluster,Point_Index,Distance_to_Centroid,";
@@ -369,8 +371,8 @@ for (int i = 0; i < N; i++) {
         out << "\n";
 
         // For each cluster, find the point closest to the centroid
-        std::vector<int> best_point_per_cluster(K, -1);
-        std::vector<float> best_distance_per_cluster(K, INFINITY);
+        vector<int> best_point_per_cluster(K, -1);
+        vector<float> best_distance_per_cluster(K, INFINITY);
 
         for (int i = 0; i < N; ++i) {
             int c = best_cluster[i];
@@ -396,13 +398,13 @@ for (int i = 0; i < N; i++) {
         }
         out.close();
     }
-    std::cout << "  ✓ Best representative points written (" << K << " points, one per cluster)\n";
+    cout << "  ✓ Best representative points written (" << K << " points, one per cluster)\n";
 
     // 3. Write top 10 best points per cluster
-    std::cout << "\nWriting top 10 points per cluster to 'top10_per_cluster.csv'...\n";
+    cout << "\nWriting top 10 points per cluster to 'top10_per_cluster.csv'...\n";
     {
-        std::ofstream out("top10_per_cluster.csv");
-        out << std::fixed << std::setprecision(3);
+        ofstream out("top10_per_cluster.csv");
+        out << fixed << setprecision(3);
 
         // Header
         out << "Cluster,Rank,Point_Index,Distance_to_Centroid,";
@@ -415,7 +417,7 @@ for (int i = 0; i < N; i++) {
         // For each cluster
         for (int c = 0; c < K; ++c) {
             // Collect all points in this cluster with their distances
-            std::vector<std::pair<float, int>> cluster_points; // (distance, point_index)
+            vector<pair<float, int>> cluster_points; // (distance, point_index)
             
             for (int i = 0; i < N; ++i) {
                 if (best_cluster[i] == c) {
@@ -424,10 +426,10 @@ for (int i = 0; i < N; i++) {
             }
 
             // Sort by distance (closest first)
-            std::sort(cluster_points.begin(), cluster_points.end());
+            sort(cluster_points.begin(), cluster_points.end());
 
             // Write top 10 (or fewer if cluster is small)
-            int top_n = std::min(10, static_cast<int>(cluster_points.size()));
+            int top_n = min(10, static_cast<int>(cluster_points.size()));
             for (int rank = 0; rank < top_n; ++rank) {
                 int idx = cluster_points[rank].second;
                 float dist = cluster_points[rank].first;
@@ -442,13 +444,13 @@ for (int i = 0; i < N; i++) {
         }
         out.close();
     }
-    std::cout << "  ✓ Top 10 points per cluster written\n";
+    cout << "  ✓ Top 10 points per cluster written\n";
 
     // 4. Write cluster centroids
-    std::cout << "\nWriting cluster centroids to 'cluster_centroids.csv'...\n";
+    cout << "\nWriting cluster centroids to 'cluster_centroids.csv'...\n";
     {
-        std::ofstream out("cluster_centroids.csv");
-        out << std::fixed << std::setprecision(3);
+        ofstream out("cluster_centroids.csv");
+        out << fixed << setprecision(3);
 
         // Header
         out << "Cluster,Size,";
@@ -469,20 +471,20 @@ for (int i = 0; i < N; i++) {
         }
         out.close();
     }
-    std::cout << "  ✓ Cluster centroids written (" << K << " centroids)\n";
+    cout << "  ✓ Cluster centroids written (" << K << " centroids)\n";
 
     // 5. Write cluster summary statistics
-    std::cout << "\nWriting cluster statistics to 'cluster_statistics.csv'...\n";
+    cout << "\nWriting cluster statistics to 'cluster_statistics.csv'...\n";
     {
-        std::ofstream out("cluster_statistics.csv");
-        out << std::fixed << std::setprecision(3);
+        ofstream out("cluster_statistics.csv");
+        out << fixed << setprecision(3);
 
         // Header
         out << "Cluster,Size,Avg_Distance,Min_Distance,Max_Distance,Std_Distance\n";
 
         // Calculate statistics for each cluster
         for (int c = 0; c < K; ++c) {
-            std::vector<float> distances_in_cluster;
+            vector<float> distances_in_cluster;
             
             for (int i = 0; i < N; ++i) {
                 if (best_cluster[i] == c) {
@@ -496,8 +498,8 @@ for (int i = 0; i < N; i++) {
             float sum = 0.0f, min_d = INFINITY, max_d = -INFINITY;
             for (float d : distances_in_cluster) {
                 sum += d;
-                min_d = std::min(min_d, d);
-                max_d = std::max(max_d, d);
+                min_d = min(min_d, d);
+                max_d = max(max_d, d);
             }
             float avg = sum / distances_in_cluster.size();
 
@@ -507,24 +509,24 @@ for (int i = 0; i < N; i++) {
                 float diff = d - avg;
                 var_sum += diff * diff;
             }
-            float std_dev = std::sqrt(var_sum / distances_in_cluster.size());
+            float std_dev = sqrt(var_sum / distances_in_cluster.size());
 
             out << c << "," << distances_in_cluster.size() << "," 
                 << avg << "," << min_d << "," << max_d << "," << std_dev << "\n";
         }
         out.close();
     }
-    std::cout << "  ✓ Cluster statistics written\n";
+    cout << "  ✓ Cluster statistics written\n";
 
     // Final summary
-    std::cout << "\n=== All Results Successfully Written ===\n";
-    std::cout << "Files created:\n";
-    std::cout << "  1. clustering_results.csv       - All " << N << " points with full details\n";
-    std::cout << "  2. best_cluster_points.csv      - Best representative point per cluster\n";
-    std::cout << "  3. top10_per_cluster.csv        - Top 10 closest points per cluster\n";
-    std::cout << "  4. cluster_centroids.csv        - Centroid coordinates for all clusters\n";
-    std::cout << "  5. cluster_statistics.csv       - Statistical summary per cluster\n";
-    std::cout << "\n";
+    cout << "\n=== All Results Successfully Written ===\n";
+    cout << "Files created:\n";
+    cout << "  1. clustering_results.csv       - All " << N << " points with full details\n";
+    cout << "  2. best_cluster_points.csv      - Best representative point per cluster\n";
+    cout << "  3. top10_per_cluster.csv        - Top 10 closest points per cluster\n";
+    cout << "  4. cluster_centroids.csv        - Centroid coordinates for all clusters\n";
+    cout << "  5. cluster_statistics.csv       - Statistical summary per cluster\n";
+    cout << "\n";
 
     return 0;
 }

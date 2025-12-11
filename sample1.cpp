@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cmath>
 #include <omp.h>
+using namespace std;
 
 // Full K-means on a static dataset:
 // - N points, 2 clusters, 2D
@@ -51,16 +52,16 @@ int main() {
         assignment[i] = -1;
     }
 
-    std::cout << "Initial centroids:\n";
+    cout << "Initial centroids:\n";
     for (int c = 0; c < K; ++c) {
-        std::cout << "  C" << c << " = ("
+        cout << "  C" << c << " = ("
                   << centroids[c][0] << ", "
                   << centroids[c][1] << ")\n";
     }
-    std::cout << "\n";
+    cout << "\n";
 
     for (int iter = 0; iter < MAX_ITERS; ++iter) {
-        std::cout << "=== Iteration " << iter << " ===\n";
+        cout << "=== Iteration " << iter << " ===\n";
 
         // ---------------- A-step: assign points to nearest centroid (parallel) ----------------
         int changes = 0;
@@ -94,7 +95,7 @@ int main() {
             int tid = omp_get_thread_num();
             #pragma omp critical
             {
-                std::cout << "[Assign][Thread " << tid << "] "
+                cout << "[Assign][Thread " << tid << "] "
                           << "Point " << i << " (" << x << ", " << y << ") "
                           << "dist0=" << dist0 << " dist1=" << dist1
                           << " -> Cluster " << assignment[i] << "\n";
@@ -104,11 +105,11 @@ int main() {
 
         // Print assignments for this iteration (serial, ordered)
         for (int i = 0; i < N; ++i) {
-            std::cout << "Point " << i << " ("
+            cout << "Point " << i << " ("
                       << data[i][0] << ", " << data[i][1]
                       << ") -> Cluster " << assignment[i] << "\n";
         }
-        std::cout << "Changed assignments this iteration: " << changes << "\n";
+        cout << "Changed assignments this iteration: " << changes << "\n";
 
         // ---------------- U-step: recompute centroids as mean of cluster points (parallel) ----------------
         float sum[K][D] = {0};   // global sums of coordinates per cluster
@@ -152,23 +153,23 @@ int main() {
             }
         }
 
-        std::cout << "Updated centroids:\n";
+        cout << "Updated centroids:\n";
         for (int c = 0; c < K; ++c) {
-            std::cout << "  C" << c << " = ("
+            cout << "  C" << c << " = ("
                       << centroids[c][0] << ", "
                       << centroids[c][1] << ")"
                       << "  [count = " << count[c] << "]\n";
         }
-        std::cout << "\n";
+        cout << "\n";
 
         // ---------------- Stopping condition: no changes ----------------
         if (changes == 0) {
-            std::cout << "Converged after " << iter << " iterations.\n";
+            cout << "Converged after " << iter << " iterations.\n";
             break;
         }
 
         if (iter == MAX_ITERS - 1) {
-            std::cout << "Reached max iterations without full convergence.\n";
+            cout << "Reached max iterations without full convergence.\n";
         }
     }
 
