@@ -10,15 +10,18 @@
 #include <sstream>
 #include <limits>
 #include <algorithm>
+
 using namespace std;
 
 int main(int argc, char* argv[]) {
     omp_set_dynamic(0);
+
     // Start timing
     double start_time = omp_get_wtime();
-    
+
     if (argc < 3) {
-        cerr << "Please use correct command format: " << argv[0] << " <input_file> <number_clusters>\n";
+        cerr << "Please use correct command format: " << argv[0]
+             << " <input_file> <number_clusters>\n";
         return 1;
     }
 
@@ -75,9 +78,9 @@ int main(int argc, char* argv[]) {
     double load_time = omp_get_wtime();
     cout << "Data loading time: " << (load_time - start_time) << " seconds\n";
 
-    // Best-of-1000 tracking (shared across all threads)
-    const int MAX_RUNS = 10;
-    const int MAX_ITERS = 2000;
+    // Best-of tracking (shared across all threads)
+    const int MAX_RUNS = 20;
+    const int MAX_ITERS = 100;
 
     double best_overall_accuracy = numeric_limits<double>::infinity();
     vector<array<float, D>> best_centroids(K);
@@ -99,17 +102,30 @@ int main(int argc, char* argv[]) {
     // Progress tracking
     int completed_runs = 0;
 
+    // ============================
+    // Timing accumulators (GLOBAL)
+    // ============================
+    double total_assign_time = 0.0;
+    double total_update_time = 0.0;
+    long long total_assign_steps = 0;
+    long long total_update_steps = 0;
+
     // ============================================================================
     // MAIN PARALLELIZATION: Parallelize the outer run loop
-    // Each thread independently runs multiple K-means iterations
     // ============================================================================
     #pragma omp parallel for schedule(dynamic) proc_bind(spread)
     for (int run = 0; run < MAX_RUNS; ++run) {
         int tid = omp_get_thread_num();
-        
+
         // Thread-local copies (each thread needs its own workspace)
         vector<int> local_cluster(N, -1);
         vector<array<float, D>> local_centroids(K);
+
+        // Thread-local timing (accumulate per run)
+        double local_assign_time = 0.0;
+        double local_update_time = 0.0;
+        long long local_assign_steps = 0;
+        long long local_update_steps = 0;
 
         // ---------- Random initialization of centroids for this run ----------
         for (int c = 0; c < K; c++) {
@@ -119,36 +135,46 @@ int main(int argc, char* argv[]) {
 
         int iter;
         for (iter = 0; iter < MAX_ITERS; ++iter) {
-           // -------------------- ASSIGNMENT STEP (PARALLEL) --------------------
-int changes = 0;
 
-for (int i = 0; i < N; i++) {
-    float bestDist = INFINITY;
-    int bestCluster = -1;
+            // -------------------- ASSIGNMENT STEP (TIMED) --------------------
+            double t_assign0 = omp_get_wtime();
 
-    // Loop over clusters
-    for (int c = 0; c < K; c++) {
-        float sum_sq = 0.0f;
+            int changes = 0;
 
-        // SIMD vectorization: compute squared distance in parallel
-        #pragma omp simd reduction(+:sum_sq)
-        for (int d = 0; d < D; d++) {
-            float diff = data[i][d] - local_centroids[c][d];
-            sum_sq += diff * diff;
-        }
+            for (int i = 0; i < N; i++) {
+                float bestDist = INFINITY;
+                int bestCluster = -1;
 
-        if (sum_sq < bestDist) {
-            bestDist = sum_sq;
-            bestCluster = c;
-        }
-    }
+                // Loop over clusters
+                for (int c = 0; c < K; c++) {
+                    float sum_sq = 0.0f;
 
-    if (bestCluster != local_cluster[i]) {
-        changes++;
-    }
-    local_cluster[i] = bestCluster;
-}
-            // ---------------- Update step ----------------
+                    // SIMD hint (may not do much at -O0, but harmless)
+                    #pragma omp simd reduction(+:sum_sq)
+                    for (int d = 0; d < D; d++) {
+                        float diff = data[i][d] - local_centroids[c][d];
+                        sum_sq += diff * diff;
+                    }
+
+                    if (sum_sq < bestDist) {
+                        bestDist = sum_sq;
+                        bestCluster = c;
+                    }
+                }
+
+                if (bestCluster != local_cluster[i]) {
+                    changes++;
+                }
+                local_cluster[i] = bestCluster;
+            }
+
+            double t_assign1 = omp_get_wtime();
+            local_assign_time += (t_assign1 - t_assign0);
+            local_assign_steps++;
+
+            // -------------------- UPDATE STEP (TIMED) --------------------
+            double t_update0 = omp_get_wtime();
+
             vector<array<float, D>> sum(K);
             vector<int> count(K, 0);
 
@@ -178,6 +204,10 @@ for (int i = 0; i < N; i++) {
                 }
             }
 
+            double t_update1 = omp_get_wtime();
+            local_update_time += (t_update1 - t_update0);
+            local_update_steps++;
+
             // Stopping condition: no changes in assignments
             if (changes == 0) {
                 break;
@@ -191,7 +221,7 @@ for (int i = 0; i < N; i++) {
         for (int i = 0; i < N; ++i) {
             int c = local_cluster[i];
             float sum_sq = 0.0f;
-            
+
             for (int d = 0; d < D; ++d) {
                 float diff = data[i][d] - local_centroids[c][d];
                 sum_sq += diff * diff;
@@ -201,28 +231,34 @@ for (int i = 0; i < N; i++) {
 
         double local_accuracy = total_dist / static_cast<double>(N);
 
-        // Update global best solution (needs synchronization)
+        // Update global best solution + progress + timing totals (needs synchronization)
         #pragma omp critical
         {
             completed_runs++;
-            
+
+            // Add timing totals from this run
+            total_assign_time += local_assign_time;
+            total_update_time += local_update_time;
+            total_assign_steps += local_assign_steps;
+            total_update_steps += local_update_steps;
+
             if (local_accuracy < best_overall_accuracy) {
                 best_overall_accuracy = local_accuracy;
                 best_centroids = local_centroids;
                 best_cluster = local_cluster;
             }
-            
-            // Progress print every 50 runs
+
+            // Progress print every 5 runs
             if (completed_runs % 5 == 0) {
                 double elapsed = omp_get_wtime() - compute_start;
                 double estimated_total = (elapsed / completed_runs) * MAX_RUNS;
                 double remaining = estimated_total - elapsed;
-                
-                cout << "Progress: " << completed_runs << " / " << MAX_RUNS 
-                          << " runs (" << (completed_runs * 100 / MAX_RUNS) << "%) "
-                          << "| Best accuracy: " << best_overall_accuracy 
-                          << " | Elapsed: " << elapsed << "s"
-                          << " | ETA: " << remaining << "s\n";
+
+                cout << "Progress: " << completed_runs << " / " << MAX_RUNS
+                     << " runs (" << (completed_runs * 100 / MAX_RUNS) << "%) "
+                     << "| Best accuracy: " << best_overall_accuracy
+                     << " | Elapsed: " << elapsed << "s"
+                     << " | ETA: " << remaining << "s\n";
                 cout << flush;
             }
         }
@@ -232,12 +268,12 @@ for (int i = 0; i < N; i++) {
 
     // ---------------- Recompute distances for BEST clustering for output ----------------
     vector<vector<float>> all_distances(N, vector<float>(K));
-    
+
     #pragma omp parallel for collapse(2)
     for (int i = 0; i < N; ++i) {
         for (int c = 0; c < K; ++c) {
             float sum_sq = 0.0f;
-            
+
             #pragma omp simd reduction(+:sum_sq)
             for (int d = 0; d < D; ++d) {
                 float diff = data[i][d] - best_centroids[c][d];
@@ -250,7 +286,7 @@ for (int i = 0; i < N; i++) {
     // ---------------- Print best centroids & accuracy ----------------
     cout << "\n=== Best Clustering over " << MAX_RUNS << " runs ===\n";
     cout << "Best overall accuracy (average distance to centroid): "
-              << best_overall_accuracy << "\n\n";
+         << best_overall_accuracy << "\n\n";
 
     cout << "Centroids of the BEST cluster configuration:\n";
     for (int c = 0; c < K; ++c) {
@@ -268,7 +304,7 @@ for (int i = 0; i < N; i++) {
     for (int i = 0; i < N; ++i) {
         cluster_sizes[best_cluster[i]]++;
     }
-    
+
     cout << "Cluster sizes:\n";
     for (int c = 0; c < K; ++c) {
         cout << "  C" << c << ": " << cluster_sizes[c] << " points\n";
@@ -314,17 +350,43 @@ for (int i = 0; i < N; i++) {
     cout << "\n";
     cout << "=== Timing Summary ===\n";
     cout << fixed << setprecision(6);
-    cout << "Data loading time:              " << (load_time - start_time)       << " seconds\n";
-    cout << "K-means (" << MAX_RUNS << " runs) time:   " 
-              << (compute_end - compute_start) << " seconds\n";
-    cout << "Total elapsed time:             " << total_time                    << " seconds\n";
+    cout << "Data loading time:              " << (load_time - start_time) << " seconds\n";
+    cout << "K-means (" << MAX_RUNS << " runs) time:   " << (compute_end - compute_start) << " seconds\n";
+    cout << "Total elapsed time:             " << total_time << " seconds\n";
     cout << "Average time per run:           " << (compute_end - compute_start) / MAX_RUNS << " seconds\n";
     cout << "Threads used:                   " << num_threads << "\n";
+
+    // Detailed assignment vs update breakdown
+    double timed_total = total_assign_time + total_update_time;
+
+    // NEW: averages per step across ALL runs/iterations
+    double avg_assign_per_step = (total_assign_steps > 0)
+        ? (total_assign_time / static_cast<double>(total_assign_steps))
+        : 0.0;
+
+    double avg_update_per_step = (total_update_steps > 0)
+        ? (total_update_time / static_cast<double>(total_update_steps))
+        : 0.0;
+
+    cout << "\n--- Detailed Phase Timing (SUM over all runs/iterations across threads) ---\n";
+    cout << "Assignment total time:          " << total_assign_time << " seconds\n";
+    cout << "Update total time:              " << total_update_time << " seconds\n";
+    cout << "Timed (assign+update) total:    " << timed_total << " seconds\n";
+    cout << "Assignment % (timed parts):     "
+         << (timed_total > 0 ? (100.0 * total_assign_time / timed_total) : 0.0) << "%\n";
+    cout << "Update % (timed parts):         "
+         << (timed_total > 0 ? (100.0 * total_update_time / timed_total) : 0.0) << "%\n";
+    cout << "Assignment steps timed:         " << total_assign_steps << "\n";
+    cout << "Update steps timed:             " << total_update_steps << "\n";
+
+    cout << "\n--- Averages (per step, averaged over ALL runs/iterations) ---\n";
+    cout << "Avg time per A-step:            " << avg_assign_per_step << " seconds\n";
+    cout << "Avg time per U-step:            " << avg_update_per_step << " seconds\n";
     cout << endl;
 
     // ---------------- Write ALL clustering results to file ----------------
     cout << "\n=== Writing Results to CSV Files ===\n";
-    
+
     // 1. Write complete clustering results
     cout << "Writing complete clustering results to 'clustering_results.csv'...\n";
     {
@@ -333,23 +395,15 @@ for (int i = 0; i < N; i++) {
 
         // Header
         out << "Point,";
-        for (int d = 0; d < D; d++) {
-            out << "D" << d << ",";
-        }
-        for (int c = 0; c < K; c++) {
-            out << "DistC" << c << ",";
-        }
+        for (int d = 0; d < D; d++) out << "D" << d << ",";
+        for (int c = 0; c < K; c++) out << "DistC" << c << ",";
         out << "Cluster\n";
 
         // All data
         for (int i = 0; i < N; i++) {
             out << i << ",";
-            for (int d = 0; d < D; d++) {
-                out << data[i][d] << ",";
-            }
-            for (int c = 0; c < K; c++) {
-                out << all_distances[i][c] << ",";
-            }
+            for (int d = 0; d < D; d++) out << data[i][d] << ",";
+            for (int c = 0; c < K; c++) out << all_distances[i][c] << ",";
             out << best_cluster[i] << "\n";
         }
         out.close();
@@ -370,21 +424,19 @@ for (int i = 0; i < N; i++) {
         }
         out << "\n";
 
-        // For each cluster, find the point closest to the centroid
         vector<int> best_point_per_cluster(K, -1);
         vector<float> best_distance_per_cluster(K, INFINITY);
 
         for (int i = 0; i < N; ++i) {
             int c = best_cluster[i];
             float dist = all_distances[i][c];
-            
+
             if (dist < best_distance_per_cluster[c]) {
                 best_distance_per_cluster[c] = dist;
                 best_point_per_cluster[c] = i;
             }
         }
 
-        // Write best point for each cluster
         for (int c = 0; c < K; ++c) {
             if (best_point_per_cluster[c] >= 0) {
                 int idx = best_point_per_cluster[c];
@@ -406,7 +458,6 @@ for (int i = 0; i < N; i++) {
         ofstream out("top10_per_cluster.csv");
         out << fixed << setprecision(3);
 
-        // Header
         out << "Cluster,Rank,Point_Index,Distance_to_Centroid,";
         for (int d = 0; d < D; d++) {
             out << "D" << d;
@@ -414,26 +465,22 @@ for (int i = 0; i < N; i++) {
         }
         out << "\n";
 
-        // For each cluster
         for (int c = 0; c < K; ++c) {
-            // Collect all points in this cluster with their distances
-            vector<pair<float, int>> cluster_points; // (distance, point_index)
-            
+            vector<pair<float, int>> cluster_points;
+
             for (int i = 0; i < N; ++i) {
                 if (best_cluster[i] == c) {
                     cluster_points.push_back({all_distances[i][c], i});
                 }
             }
 
-            // Sort by distance (closest first)
             sort(cluster_points.begin(), cluster_points.end());
 
-            // Write top 10 (or fewer if cluster is small)
             int top_n = min(10, static_cast<int>(cluster_points.size()));
             for (int rank = 0; rank < top_n; ++rank) {
                 int idx = cluster_points[rank].second;
                 float dist = cluster_points[rank].first;
-                
+
                 out << c << "," << (rank + 1) << "," << idx << "," << dist << ",";
                 for (int d = 0; d < D; ++d) {
                     out << data[idx][d];
@@ -452,7 +499,6 @@ for (int i = 0; i < N; i++) {
         ofstream out("cluster_centroids.csv");
         out << fixed << setprecision(3);
 
-        // Header
         out << "Cluster,Size,";
         for (int d = 0; d < D; d++) {
             out << "D" << d;
@@ -460,7 +506,6 @@ for (int i = 0; i < N; i++) {
         }
         out << "\n";
 
-        // Write each centroid
         for (int c = 0; c < K; ++c) {
             out << c << "," << cluster_sizes[c] << ",";
             for (int d = 0; d < D; ++d) {
@@ -479,13 +524,11 @@ for (int i = 0; i < N; i++) {
         ofstream out("cluster_statistics.csv");
         out << fixed << setprecision(3);
 
-        // Header
         out << "Cluster,Size,Avg_Distance,Min_Distance,Max_Distance,Std_Distance\n";
 
-        // Calculate statistics for each cluster
         for (int c = 0; c < K; ++c) {
             vector<float> distances_in_cluster;
-            
+
             for (int i = 0; i < N; ++i) {
                 if (best_cluster[i] == c) {
                     distances_in_cluster.push_back(all_distances[i][c]);
@@ -494,7 +537,6 @@ for (int i = 0; i < N; i++) {
 
             if (distances_in_cluster.empty()) continue;
 
-            // Calculate statistics
             float sum = 0.0f, min_d = INFINITY, max_d = -INFINITY;
             for (float d : distances_in_cluster) {
                 sum += d;
@@ -503,7 +545,6 @@ for (int i = 0; i < N; i++) {
             }
             float avg = sum / distances_in_cluster.size();
 
-            // Calculate standard deviation
             float var_sum = 0.0f;
             for (float d : distances_in_cluster) {
                 float diff = d - avg;
@@ -511,7 +552,7 @@ for (int i = 0; i < N; i++) {
             }
             float std_dev = sqrt(var_sum / distances_in_cluster.size());
 
-            out << c << "," << distances_in_cluster.size() << "," 
+            out << c << "," << distances_in_cluster.size() << ","
                 << avg << "," << min_d << "," << max_d << "," << std_dev << "\n";
         }
         out.close();
